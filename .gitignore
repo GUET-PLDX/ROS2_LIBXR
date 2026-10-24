@@ -4,3 +4,5 @@
 /log
 /.cache
 /.claude
+__pycache__/
+*.py[cod]
