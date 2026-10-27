@@ -6,7 +6,8 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 def generate_launch_description():
     return LaunchDescription([
-        DeclareLaunchArgument('cmd_topic', default_value='/cmd_vel_mpc'),
+        DeclareLaunchArgument('chassis_cmd_topic', default_value='/chassis_cmd_mpc'),
+        DeclareLaunchArgument('chassis_yaw_offset', default_value='0.0'),
         DeclareLaunchArgument('behavior_topic', default_value='/sentry/behaivor_send'),
         DeclareLaunchArgument('baudrate', default_value='921600'),
         DeclareLaunchArgument('usb_vid', default_value='16d0'),
@@ -25,7 +26,9 @@ def generate_launch_description():
         output='both',
         emulate_tty=True,
         parameters=[{
-            'cmd_topic': LaunchConfiguration('cmd_topic'),
+            'chassis_cmd_topic': LaunchConfiguration('chassis_cmd_topic'),
+            'chassis_yaw_offset': ParameterValue(
+                LaunchConfiguration('chassis_yaw_offset'), value_type=float),
             'behavior_topic': LaunchConfiguration('behavior_topic'),
             'baudrate': LaunchConfiguration('baudrate'),
             'usb_vid': LaunchConfiguration('usb_vid'),

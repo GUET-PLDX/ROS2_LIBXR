@@ -1,7 +1,7 @@
 // The package builds Release (-DNDEBUG); keep the checks active.
 #undef NDEBUG
 #include "ros2_libxr/board_clock.hpp"
-#include "ros2_libxr/command_arbiter.hpp"
+#include "ros2_libxr/force_command.hpp"
 #include "ros2_libxr/wire.hpp"
 
 #include <cassert>
@@ -12,7 +12,7 @@
 int main()
 {
   using namespace ros2_libxr::wire;
-  assert(sizeof(ChassisTarget) == 45);
+  assert(sizeof(ChassisTarget) == 12);
   assert(sizeof(BehaviorData) == 26);
   assert(sizeof(TeamInfo) == 48);
   assert(sizeof(GameInfo) == 22);
@@ -57,37 +57,32 @@ int main()
     assert(b - a == 8192);
   }
   {
-    using ros2_libxr::Arbitrate;
     using ros2_libxr::ChassisSetpoint;
+    using ros2_libxr::FreshCommand;
     using ros2_libxr::RotateToBody;
     using ros2_libxr::TimedSetpoint;
-    const double timeout = 0.15;
-    TimedSetpoint twist{{1.0F, 2.0F, 0.5F, 9.0F, 9.0F, 9.0F}, 10.0};
-    TimedSetpoint chassis{{0.3F, -0.4F, 0.1F, 20.0F, -5.0F, 1.5F}, 10.05};
-    // A fresh ChassisCommand is sent whole, never mixed with the Twist.
-    ChassisSetpoint out = Arbitrate(twist, chassis, 10.1, timeout);
-    assert(out.vx == 0.3F && out.vy == -0.4F && out.wz == 0.1F);
+    const TimedSetpoint chassis{{20.0F, -5.0F, 1.5F}, 10.0, 100.0};
+    auto out = FreshCommand(chassis, 10.1, 100.1, 0.15);
     assert(out.fx == 20.0F && out.fy == -5.0F && out.mz == 1.5F);
-    // Stale ChassisCommand: velocity-only Twist, never with a force.
-    out = Arbitrate(twist, chassis, 10.21, timeout);
-    assert(out.vx == 0.0F && out.fx == 0.0F);  // the Twist is stale too
-    twist.stamp = 10.2;
-    out = Arbitrate(twist, chassis, 10.21, timeout);
-    assert(out.vx == 1.0F && out.vy == 2.0F && out.wz == 0.5F);
-    assert(out.fx == 0.0F && out.fy == 0.0F && out.mz == 0.0F);
-    // Never received, or non-finite: zero.
-    out = Arbitrate(TimedSetpoint{}, TimedSetpoint{}, 1.0, timeout);
-    assert(out.vx == 0.0F && out.fx == 0.0F);
-    chassis = {{0.3F, 0.0F, 0.0F, NAN, 0.0F, 0.0F}, 10.2};
-    out = Arbitrate(twist, chassis, 10.21, timeout);
-    assert(out.vx == 1.0F && out.fx == 0.0F);  // falls back to the Twist
-    // The optional rotation turns velocity and force together; yaw rate and torque stay.
-    const ChassisSetpoint world{1.0F, 0.0F, 0.2F, 10.0F, 0.0F, 3.0F};
-    const ChassisSetpoint body = RotateToBody(world, M_PI / 2.0);
-    assert(std::fabs(body.vx) < 1e-6F && std::fabs(body.vy + 1.0F) < 1e-6F);
+    out = FreshCommand(chassis, 10.2, 100.1, 0.15);
+    assert(out.fx == 0.0F && out.mz == 0.0F);
+    // Paused ROS time must not keep an old force alive.
+    out = FreshCommand(chassis, 10.1, 100.2, 0.15);
+    assert(out.fx == 0.0F && out.mz == 0.0F);
+    out = FreshCommand(chassis, 9.9, 100.1, 0.15);
+    assert(out.fx == 0.0F);
+    out = FreshCommand({{NAN, 0.0F, 0.0F}, 10.0, 100.0}, 10.1, 100.1, 0.15);
+    assert(out.fx == 0.0F);
+    out = FreshCommand({}, 10.0, 100.0, 0.15);
+    assert(out.fx == 0.0F);
+    const auto body = RotateToBody({10.0F, 0.0F, 3.0F}, M_PI / 2.0);
     assert(std::fabs(body.fx) < 1e-5F && std::fabs(body.fy + 10.0F) < 1e-5F);
-    assert(body.wz == 0.2F && body.mz == 3.0F);
+    assert(body.mz == 3.0F);
+    // The body-frame USB payload contains exactly this wrench.
+    const ChassisTarget wire{body.fx, body.fy, body.mz};
+    assert(wire.mz == 3.0F && offsetof(ChassisTarget, mz) == 8);
   }
+
   {
     // A board reset (time goes backwards) restarts the mapping instead of jumping.
     BoardClockMapper clock;

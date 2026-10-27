@@ -8,9 +8,7 @@ namespace ros2_libxr::wire {
 #pragma pack(push, 1)
 struct ChassisTarget
 {
-  float vx, vy, wz, yaw, cvx, cvy, cw, fx, fy, fw;
-  bool speed;
-  float delta_yaw;
+  float fx, fy, mz;  // chassis-frame drive wrench, N and N*m
 };
 struct BehaviorData
 {
@@ -73,7 +71,7 @@ struct RadarInfo
   bool sensed;
 };
 // Measured chassis velocity from the wheel forward kinematics, chassis body frame
-// (same axes and signs as ChassisTarget vx/vy/wz). Mirrors
+// (the chassis axes used by ChassisTarget). Mirrors
 // Pldx::DualBoardControl::ChassisFeedback in the MC02 DualBoard module.
 struct ChassisFeedback
 {
@@ -85,7 +83,7 @@ struct ChassisFeedback
   uint8_t flags;
 };
 #pragma pack(pop)
-static_assert(sizeof(ChassisTarget) == 45 && sizeof(BehaviorData) == 26);
+static_assert(sizeof(ChassisTarget) == 12 && sizeof(BehaviorData) == 26);
 static_assert(sizeof(TeamInfo) == 48 && sizeof(GameInfo) == 22);
 static_assert(sizeof(OnlineInfo) == 37 && sizeof(OfflineInfo) == 16 && sizeof(RadarInfo) == 59);
 static_assert(sizeof(ChassisFeedback) == 26 && offsetof(ChassisFeedback, sequence) == 16 &&

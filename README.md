@@ -6,20 +6,21 @@ its LibXR transport implementation.
 
 ## Topics
 
-The bridge publishes `nav_data` and `behavior_data` at 50 Hz over USB CDC and
-receives `team_info`, `game_info`, `online_info`, `offline_info`, and
-`radar_info`. It subscribes to `/cmd_vel_mpc`, `/chassis_cmd_mpc`, and
-`/sentry/behaivor_send`, and publishes the matching `/sentry/*` status topics
-consumed by BT Manager.
+The bridge subscribes to `/chassis_cmd_mpc` and `/sentry/behaivor_send` and
+publishes `nav_data` and `behavior_data` at 100 Hz over navigation USB CDC.
+`nav_data` is three packed little-endian float32 values: chassis-frame `Fx`, `Fy`,
+`Mz` (12 bytes, N/N*m). Both MC02 boards must use the matching firmware.
 
-By default, command components are forwarded unchanged. A fresh
-`/chassis_cmd_mpc` takes priority and forwards velocity and force feedforward
-from the same controller cycle. After 150 ms without that command, the bridge
-uses a fresh `/cmd_vel_mpc` with zero force; if both streams are stale, it sends
-zero heartbeats. The optional `rotate_world_to_body` parameter rotates velocity
-and force together using `/aft_mapped_to_init`; stale odometry stops output in
-that mode. Behavior scan and tunnel alignment angles are converted from degrees
-to radians. Firmware-only fields in the wire protocol are zeroed.
+The command's source stamp and steady-clock receipt age must be within 150 ms.
+A missing, stale, non-finite or non-planar command produces zero wrench heartbeats.
+Current LIO odometry is required for the world-to-chassis rotation. Its frame must
+match the command frame. `chassis_yaw_offset` (rad) calibrates the LIO-to-chassis
+axis offset; the heading is projected over odometry age plus `rotate_latency`.
+The chassis control point and axes must match the firmware force allocation.
+
+The bridge receives `team_info`, `game_info`, `online_info`, `offline_info`,
+`radar_info` and `chassis_feedback`, and publishes the corresponding ROS status
+and measured chassis velocity topics. Behavior angles are converted to radians.
 
 ## Run
 
@@ -30,7 +31,7 @@ without the physical USB link. For standalone launch:
 ros2 launch ros2_libxr ros2_libxr_launch.py
 ```
 
-Parameters include `cmd_topic`, `behavior_topic`, `baudrate` (921600),
+Parameters include `chassis_cmd_topic`, `chassis_yaw_offset`, `behavior_topic`, `baudrate` (921600),
 `usb_vid` (`16d0`), `usb_pid` (`1492`), and `control_interface`
 (`XRUSB Navigation Control`).
 
