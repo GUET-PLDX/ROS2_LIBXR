@@ -1,6 +1,6 @@
 [submodule "src/ros2_libxr/libxr"]
 	path = src/ros2_libxr/libxr
-	url = https://github.com/Jiu-xiao/libxr.git
+ url = https://github.com/Wanqiq7/libxr.git
 [submodule "src/ros2_libxr/include/SharedTopic"]
 	path = src/ros2_libxr/include/SharedTopic
 	url = https://github.com/xrobot-org/SharedTopic.git
