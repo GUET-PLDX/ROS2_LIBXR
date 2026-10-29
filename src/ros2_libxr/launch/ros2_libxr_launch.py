@@ -31,8 +31,10 @@ def generate_launch_description():
                 LaunchConfiguration('chassis_yaw_offset'), value_type=float),
             'behavior_topic': LaunchConfiguration('behavior_topic'),
             'baudrate': LaunchConfiguration('baudrate'),
-            'usb_vid': LaunchConfiguration('usb_vid'),
-            'usb_pid': LaunchConfiguration('usb_pid'),
+            'usb_vid': ParameterValue(
+                LaunchConfiguration('usb_vid'), value_type=str),
+            'usb_pid': ParameterValue(
+                LaunchConfiguration('usb_pid'), value_type=str),
             'control_interface': LaunchConfiguration('control_interface'),
             'chassis_velocity_topic': LaunchConfiguration('chassis_velocity_topic'),
             'chassis_yaw_rate_source': LaunchConfiguration('chassis_yaw_rate_source'),

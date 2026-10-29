@@ -3,14 +3,39 @@
 #include "ros2_libxr/board_clock.hpp"
 #include "ros2_libxr/force_command.hpp"
 #include "ros2_libxr/wire.hpp"
+#include "message.hpp"
 
 #include <cassert>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdlib>
 
 int main()
 {
+  using PacketHeader = LibXR::Topic::PackedDataHeader;
+  static_assert(sizeof(PacketHeader) == 16);
+  static_assert(LibXR::Topic::PACK_BASE_SIZE == 17);
+  static_assert(offsetof(PacketHeader, version) == 14);
+  static_assert(offsetof(PacketHeader, pack_header_crc8) == 15);
+  static_assert(std::endian::native == std::endian::little);
+  {
+    PacketHeader header{};
+    header.prefix = LibXR::Topic::PACKET_PREFIX;
+    header.SetDataLen(0x123456U);
+    header.topic_name_crc32 = 0x78563412U;
+    header.SetTimestamp(LibXR::MicrosecondTimestamp(0x060504030201ULL));
+    header.version = LibXR::Topic::PACKET_VERSION;
+    assert(header.data_len_raw[0] == 0x56U);
+    assert(header.data_len_raw[1] == 0x34U);
+    assert(header.data_len_raw[2] == 0x12U);
+    assert(header.timestamp_us_raw[0] == 0x01U);
+    assert(header.timestamp_us_raw[5] == 0x06U);
+    assert(header.GetDataLen() == 0x123456U);
+    assert(static_cast<uint64_t>(header.GetTimestamp()) == 0x060504030201ULL);
+    assert(header.version == 1U);
+  }
+
   using namespace ros2_libxr::wire;
   assert(sizeof(ChassisTarget) == 12);
   assert(sizeof(BehaviorData) == 26);
