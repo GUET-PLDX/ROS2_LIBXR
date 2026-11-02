@@ -1,4 +1,3 @@
-#include "ros2_libxr/board_clock.hpp"
 #include "ros2_libxr/force_command.hpp"
 #include "ros2_libxr/wire.hpp"
 
@@ -10,7 +9,6 @@
 #include <string>
 #include <vector>
 
-#include <geometry_msgs/msg/twist_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <ros_interfaces/msg/behavior.hpp>
@@ -45,15 +43,6 @@ public:
     const auto pid = declare_parameter<std::string>("usb_pid", "1492");
     const auto iface = declare_parameter<std::string>("control_interface", "XRUSB Navigation Control");
     const auto behavior_topic = declare_parameter<std::string>("behavior_topic", "/sentry/behaivor_send");
-    // Wheel odometry from the chassis board (body frame), for the controller's local integration.
-    const auto feedback_topic =
-      declare_parameter<std::string>("chassis_velocity_topic", "/sentry/chassis_velocity");
-    feedback_frame_ = declare_parameter<std::string>("chassis_velocity_frame", "base_link");
-    // "wheel": yaw rate from the wheel kinematics; "gyro": chassis IMU when valid, else wheel.
-    gyro_yaw_rate_ = declare_parameter<std::string>("chassis_yaw_rate_source", "wheel") == "gyro";
-    require_all_wheels_ = declare_parameter<bool>("chassis_velocity_require_all_wheels", true);
-    // Sample age at CAN reception (chassis sampling + CAN transfer), subtracted from the stamp.
-    sample_latency_us_ = declare_parameter<int>("chassis_velocity_latency_us", 1000);
     LibXR::PlatformInit();
     uart_ = std::make_unique<LibXR::LinuxUART>(
       vid, pid, iface, static_cast<unsigned int>(baud), LibXR::LinuxUART::Parity::NO_PARITY, 8, 1);
@@ -73,7 +62,6 @@ public:
     online_ = LibXR::Topic::CreateTopic<OnlineInfo>("online_info");
     offline_ = LibXR::Topic::CreateTopic<OfflineInfo>("offline_info");
     radar_ = LibXR::Topic::CreateTopic<RadarInfo>("radar_info");
-    feedback_ = LibXR::Topic::CreateTopic<ChassisFeedback>("chassis_feedback");
     LibXR::HardwareContainer hw{LibXR::Entry<LibXR::RamFS>({*ramfs_, {"ramfs"}}),
       LibXR::Entry<LibXR::UART>({*uart_, {"uart_client"}})};
     static LibXR::ApplicationManager manager;
@@ -85,8 +73,7 @@ public:
         {"game_info"},
         {"online_info"},
         {"offline_info"},
-        {"radar_info"},
-        {"chassis_feedback"}});
+        {"radar_info"}});
     static auto tx = std::make_unique<SharedTopicClient>(hw,
       manager,
       "uart_client",
@@ -152,11 +139,6 @@ public:
     online_pub_ = create_publisher<ros_interfaces::msg::SentryInfoOnline>("/sentry/online_info", 10);
     offline_pub_ = create_publisher<ros_interfaces::msg::SentryInfoOffline>("/sentry/offline_info", 10);
     radar_pub_ = create_publisher<ros_interfaces::msg::RadarInfo>("/sentry/radar_info", 10);
-    feedback_pub_ =
-      create_publisher<geometry_msgs::msg::TwistStamped>(feedback_topic, rclcpp::SensorDataQoS());
-    Register<ChassisFeedback>(feedback_, [this](const ChassisFeedback & d) {
-      onChassisFeedback(d);
-    });
     Register<TeamInfo>(team_, [this](const TeamInfo & d) {
       ros_interfaces::msg::TeamInformation m;
       m.header.stamp = now();
@@ -262,42 +244,6 @@ private:
     return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
   }
 
-  void onChassisFeedback(const ChassisFeedback & d)
-  {
-    const rclcpp::Time host_now = now();
-    if (has_feedback_sequence_ && d.sequence != last_feedback_sequence_ + 1U &&
-        d.sequence != last_feedback_sequence_) {
-      feedback_gaps_ += d.sequence - last_feedback_sequence_ - 1U;
-      RCLCPP_WARN_THROTTLE(get_logger(),
-        *get_clock(),
-        5000,
-        "chassis_feedback sequence gap: %u -> %u (%lu frames lost in total)",
-        last_feedback_sequence_,
-        d.sequence,
-        static_cast<unsigned long>(feedback_gaps_));
-    }
-    const bool duplicate = has_feedback_sequence_ && d.sequence == last_feedback_sequence_;
-    last_feedback_sequence_ = d.sequence;
-    has_feedback_sequence_ = true;
-    const bool wheels_ok = !require_all_wheels_ || (d.flags & FEEDBACK_WHEELS_MASK) == FEEDBACK_WHEELS_MASK;
-    // Invalid, partial or duplicate samples are not published: the controller times out
-    // and falls back to LIO alone.
-    if (duplicate || !(d.flags & FEEDBACK_VALID) || !(d.flags & FEEDBACK_LINK) || !wheels_ok ||
-        !std::isfinite(d.vx) || !std::isfinite(d.vy) || !std::isfinite(d.wz)) {
-      return;
-    }
-    const int64_t host_us = host_now.nanoseconds() / 1000;
-    const int64_t stamp_us = clock_.map(d.stamp_us, host_us) - sample_latency_us_;
-    geometry_msgs::msg::TwistStamped m;
-    m.header.stamp = rclcpp::Time(stamp_us * 1000, host_now.get_clock_type());
-    m.header.frame_id = feedback_frame_;
-    m.twist.linear.x = d.vx;
-    m.twist.linear.y = d.vy;
-    const bool use_gyro = gyro_yaw_rate_ && (d.flags & FEEDBACK_GYRO_VALID) && std::isfinite(d.gyro_z);
-    m.twist.angular.z = use_gyro ? d.gyro_z : d.wz;
-    feedback_pub_->publish(m);
-  }
-
   template <class T> void Register(LibXR::Topic & topic, std::function<void(const T &)> fn)
   {
     using Bound = std::function<void(const T &)>;
@@ -313,7 +259,7 @@ private:
   std::unique_ptr<LibXR::RamFS> ramfs_;
   std::unique_ptr<LibXR::Terminal<1024, 64, 16, 128>> terminal_;
   std::unique_ptr<LibXR::Thread> terminal_thread_;
-  LibXR::Topic nav_, behavior_, team_, game_, online_, offline_, radar_, feedback_;
+  LibXR::Topic nav_, behavior_, team_, game_, online_, offline_, radar_;
   std::vector<LibXR::Topic::Callback> callbacks_;
   ros2_libxr::TimedSetpoint chassis_cmd_;
   double command_timeout_{0.15};
@@ -333,15 +279,6 @@ private:
   rclcpp::Publisher<ros_interfaces::msg::SentryInfoOnline>::SharedPtr online_pub_;
   rclcpp::Publisher<ros_interfaces::msg::SentryInfoOffline>::SharedPtr offline_pub_;
   rclcpp::Publisher<ros_interfaces::msg::RadarInfo>::SharedPtr radar_pub_;
-  rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr feedback_pub_;
-  std::string feedback_frame_;
-  bool gyro_yaw_rate_{false};
-  bool require_all_wheels_{true};
-  int64_t sample_latency_us_{1000};
-  ros2_libxr::BoardClockMapper clock_;  // used only from the SharedTopic callback
-  uint32_t last_feedback_sequence_{0};
-  bool has_feedback_sequence_{false};
-  uint64_t feedback_gaps_{0};
   rclcpp::TimerBase::SharedPtr timer_;
 };
 }  // namespace

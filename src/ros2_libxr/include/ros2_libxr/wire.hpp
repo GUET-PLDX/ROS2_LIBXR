@@ -70,28 +70,10 @@ struct RadarInfo
   uint16_t coins, accumulated;
   bool sensed;
 };
-// Measured chassis velocity from the wheel forward kinematics, chassis body frame
-// (the chassis axes used by ChassisTarget). Mirrors
-// Pldx::DualBoardControl::ChassisFeedback in the MC02 DualBoard module.
-struct ChassisFeedback
-{
-  float vx, vy, wz;   // wheel odometry, m/s and rad/s
-  float gyro_z;       // chassis IMU yaw rate, rad/s (valid when FEEDBACK_GYRO_VALID)
-  uint32_t sequence;  // extended CAN sequence; gaps mean CAN/USB loss
-  uint32_t stamp_us;  // gimbal-board microseconds at CAN reception, low 32 bits
-  uint8_t mode;       // chassis mode wire value
-  uint8_t flags;
-};
 #pragma pack(pop)
 static_assert(sizeof(ChassisTarget) == 12 && sizeof(BehaviorData) == 26);
 static_assert(sizeof(TeamInfo) == 48 && sizeof(GameInfo) == 22);
 static_assert(sizeof(OnlineInfo) == 37 && sizeof(OfflineInfo) == 16 && sizeof(RadarInfo) == 59);
-static_assert(sizeof(ChassisFeedback) == 26 && offsetof(ChassisFeedback, sequence) == 16 &&
-              offsetof(ChassisFeedback, stamp_us) == 20 && offsetof(ChassisFeedback, flags) == 25);
-constexpr uint8_t FEEDBACK_VALID = 0x01U;
-constexpr uint8_t FEEDBACK_WHEELS_MASK = 0x1EU;  // bit1..4: wheel0..3 online
-constexpr uint8_t FEEDBACK_LINK = 0x20U;
-constexpr uint8_t FEEDBACK_GYRO_VALID = 0x40U;
 constexpr float DegreesToRadians(float degrees)
 {
   return degrees * 0.01745329251994329577F;
