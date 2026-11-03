@@ -1,4 +1,4 @@
-#include "ros2_libxr/force_command.hpp"
+#include "ros2_libxr/velocity_command.hpp"
 #include "ros2_libxr/wire.hpp"
 
 #include <chrono>
@@ -9,10 +9,10 @@
 #include <string>
 #include <vector>
 
+#include <geometry_msgs/msg/twist.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <ros_interfaces/msg/behavior.hpp>
-#include <ros_interfaces/msg/chassis_command.hpp>
 #include <ros_interfaces/msg/game_info.hpp>
 #include <ros_interfaces/msg/radar_info.hpp>
 #include <ros_interfaces/msg/sentry_info_offline.hpp>
@@ -30,8 +30,7 @@ namespace {
 using namespace std::chrono_literals;
 using namespace ros2_libxr::wire;
 using ros2_libxr::ChassisSetpoint;
-using ros2_libxr::FreshCommand;
-using ros2_libxr::RotateToBody;
+using ros2_libxr::WorldToBody;
 
 class NavigationLink final : public rclcpp::Node
 {
@@ -69,49 +68,56 @@ public:
       manager,
       "uart_client",
       256,
-      std::initializer_list<SharedTopic::TopicConfig>{{"team_info"},
-        {"game_info"},
-        {"online_info"},
-        {"offline_info"},
-        {"radar_info"}});
+      std::initializer_list<SharedTopic::TopicConfig>{
+        {"team_info"}, {"game_info"}, {"online_info"}, {"offline_info"}, {"radar_info"}});
     static auto tx = std::make_unique<SharedTopicClient>(hw,
       manager,
       "uart_client",
       16,
       std::initializer_list<SharedTopicClient::TopicConfig>{{"nav_data"}, {"behavior_data"}});
 
-    const auto chassis_cmd_topic = declare_parameter<std::string>("chassis_cmd_topic", "/chassis_cmd_mpc");
+    const auto cmd_topic = declare_parameter<std::string>("cmd_topic", "/cmd_vel_mpc");
     command_timeout_ = declare_parameter<double>("command_timeout", 0.15);
+    const auto odom_topic = declare_parameter<std::string>("odom_topic", "/aft_mapped_to_init");
+    const auto odom_frame = declare_parameter<std::string>("odom_frame", "camera_init");
+    odom_timeout_ = declare_parameter<double>("odom_timeout", 0.3);
     rotate_latency_ = declare_parameter<double>("rotate_latency", 0.02);
     chassis_yaw_offset_ = declare_parameter<double>("chassis_yaw_offset", 0.0);
-    if (!std::isfinite(command_timeout_) || command_timeout_ <= 0.0 || !std::isfinite(rotate_latency_) ||
-        rotate_latency_ < 0.0 || !std::isfinite(chassis_yaw_offset_)) {
-      throw std::invalid_argument("Force command timeout, latency and yaw offset must be finite");
+    if (!std::isfinite(command_timeout_) || command_timeout_ <= 0.0 || !std::isfinite(odom_timeout_) ||
+        odom_timeout_ <= 0.0 || !std::isfinite(rotate_latency_) || rotate_latency_ < 0.0 ||
+        !std::isfinite(chassis_yaw_offset_) || odom_frame.empty()) {
+      throw std::invalid_argument("Invalid velocity command timing, yaw offset or odometry frame");
     }
-    chassis_cmd_sub_ = create_subscription<ros_interfaces::msg::ChassisCommand>(chassis_cmd_topic,
+    cmd_sub_ = create_subscription<geometry_msgs::msg::Twist>(cmd_topic,
       rclcpp::SensorDataQoS().keep_last(1),
-      [this](ros_interfaces::msg::ChassisCommand::ConstSharedPtr msg) {
-        const auto & w = msg->wrench;
-        if (w.force.z != 0.0 || w.torque.x != 0.0 || w.torque.y != 0.0 || msg->header.frame_id.empty()) {
+      [this](geometry_msgs::msg::Twist::ConstSharedPtr msg) {
+        if (!std::isfinite(msg->linear.x) || !std::isfinite(msg->linear.y) ||
+            !std::isfinite(msg->angular.z)) {
           chassis_cmd_ = {};
           return;
         }
-        chassis_cmd_.value = {
-          static_cast<float>(w.force.x), static_cast<float>(w.force.y), static_cast<float>(w.torque.z)};
-        chassis_cmd_.stamp = rclcpp::Time(msg->header.stamp, get_clock()->get_clock_type()).seconds();
+        chassis_cmd_.value = {static_cast<float>(msg->linear.x),
+          static_cast<float>(msg->linear.y),
+          static_cast<float>(msg->angular.z)};
+        chassis_cmd_.stamp = now().seconds();
         chassis_cmd_.received = steadySeconds();
-        command_frame_ = msg->header.frame_id;
       });
-    const auto odom_topic = declare_parameter<std::string>("odom_topic", "/aft_mapped_to_init");
     odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(odom_topic,
       rclcpp::SensorDataQoS().keep_last(1),
-      [this](nav_msgs::msg::Odometry::ConstSharedPtr msg) {
+      [this, odom_frame](nav_msgs::msg::Odometry::ConstSharedPtr msg) {
         const auto & q = msg->pose.pose.orientation;
-        odom_yaw_ = std::atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z));
-        odom_yaw_rate_ = msg->twist.twist.angular.z;
-        odom_stamp_ = rclcpp::Time(msg->header.stamp, get_clock()->get_clock_type()).seconds();
-        odom_received_ = steadySeconds();
-        odom_frame_ = msg->header.frame_id;
+        const double norm = std::hypot(std::hypot(q.w, q.x), std::hypot(q.y, q.z));
+        const double rate = msg->twist.twist.angular.z;
+        if (msg->header.frame_id != odom_frame || !std::isfinite(norm) || norm < 1.0e-6 ||
+            !std::isfinite(rate)) {
+          heading_ = {};
+          return;
+        }
+        const double w = q.w / norm, x = q.x / norm, y = q.y / norm, z = q.z / norm;
+        heading_.yaw = std::atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z));
+        heading_.yaw_rate = rate;
+        heading_.stamp = rclcpp::Time(msg->header.stamp, get_clock()->get_clock_type()).seconds();
+        heading_.received = steadySeconds();
       });
     behavior_sub_ = create_subscription<ros_interfaces::msg::Behavior>(
       behavior_topic, 10, [this](ros_interfaces::msg::Behavior::ConstSharedPtr m) {
@@ -217,25 +223,32 @@ public:
     timer_ = create_wall_timer(10ms, [this] {
       const double t = now().seconds();
       const double steady_now = steadySeconds();
-      ChassisSetpoint cmd = FreshCommand(chassis_cmd_, t, steady_now, command_timeout_);
-      const double age = t - odom_stamp_;
-      if (odom_frame_ != command_frame_ || odom_frame_.empty() || odom_stamp_ < 0.0 || age < 0.0 ||
-          age > 0.3 || steady_now - odom_received_ > 0.3 || !std::isfinite(odom_yaw_) ||
-          !std::isfinite(odom_yaw_rate_)) {
-        cmd = {};
-      } else {
-        cmd = RotateToBody(cmd, odom_yaw_ + chassis_yaw_offset_ + odom_yaw_rate_ * (age + rotate_latency_));
-      }
-      ChassisTarget d{cmd.fx, cmd.fy, cmd.mz};
+      bool valid = false;
+      const ChassisSetpoint cmd = WorldToBody(chassis_cmd_,
+        heading_,
+        t,
+        steady_now,
+        command_timeout_,
+        odom_timeout_,
+        rotate_latency_,
+        chassis_yaw_offset_,
+        &valid);
+      ChassisTarget d{};
+      d.vx = cmd.vx;
+      d.vy = cmd.vy;
+      d.wz = cmd.wz;
+      d.speed = valid;
       nav_.Publish(d);
       BehaviorData b = last_behavior_;
       behavior_.Publish(b);
     });
     RCLCPP_INFO(get_logger(),
       "USB navigation link configured: %s:%ld baud, control interface '%s'",
-      chassis_cmd_topic.c_str(),
+      cmd_topic.c_str(),
       static_cast<long>(baud),
       iface.c_str());
+    RCLCPP_WARN(
+      get_logger(), "Velocity downlink requires firmware supporting the legacy 45-byte nav_data protocol");
   }
 
 private:
@@ -262,15 +275,12 @@ private:
   LibXR::Topic nav_, behavior_, team_, game_, online_, offline_, radar_;
   std::vector<LibXR::Topic::Callback> callbacks_;
   ros2_libxr::TimedSetpoint chassis_cmd_;
+  ros2_libxr::TimedHeading heading_;
   double command_timeout_{0.15};
+  double odom_timeout_{0.3};
   double rotate_latency_{0.02};
   double chassis_yaw_offset_{0.0};
-  std::string command_frame_, odom_frame_;
-  double odom_received_{-1.0};
-  double odom_yaw_{0.0};
-  double odom_yaw_rate_{0.0};
-  double odom_stamp_{-1.0};
-  rclcpp::Subscription<ros_interfaces::msg::ChassisCommand>::SharedPtr chassis_cmd_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   BehaviorData last_behavior_{};
   rclcpp::Subscription<ros_interfaces::msg::Behavior>::SharedPtr behavior_sub_;

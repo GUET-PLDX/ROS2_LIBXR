@@ -6,17 +6,23 @@ its LibXR transport implementation.
 
 ## Topics
 
-The bridge subscribes to `/chassis_cmd_mpc` and `/sentry/behaivor_send` and
+The bridge subscribes to `/cmd_vel_mpc` and `/sentry/behaivor_send` and
 publishes `nav_data` and `behavior_data` at 100 Hz over navigation USB CDC.
-`nav_data` is three packed little-endian float32 values: chassis-frame `Fx`, `Fy`,
-`Mz` (12 bytes, N/N*m). Both MC02 boards must use the matching firmware.
+`nav_data` uses the 45-byte packed velocity protocol. Its first three float32
+values are chassis-frame `vx`, `vy` (m/s) and `wz` (rad/s). The bridge rotates
+the MPC's `camera_init` velocity using LIO yaw plus `chassis_yaw_offset` and
+projects heading over odometry age plus `rotate_latency`.
 
-The command's source stamp and steady-clock receipt age must be within 150 ms.
-A missing, stale, non-finite or non-planar command produces zero wrench heartbeats.
-Current LIO odometry is required for the world-to-chassis rotation. Its frame must
-match the command frame. `chassis_yaw_offset` (rad) calibrates the LIO-to-chassis
-axis offset; the heading is projected over odometry age plus `rotate_latency`.
-The chassis control point and axes must match the firmware force allocation.
+Commands are unstamped; both ROS and steady-clock time since receipt must be
+within 150 ms. Odometry must match `odom_frame` and be fresh within 300 ms by
+both clocks. Missing, stale, non-finite or unrepresentable inputs produce a zero
+payload with the speed-control flag cleared; the matching firmware revokes AI
+chassis control. A fresh intentional zero velocity keeps the flag set.
+
+MC02 firmware must include the matching HostDataLink, DualBoard and Chassis
+module revisions and both boards must be updated together. Older 12-byte wrench
+firmware is incompatible. Verify the yaw offset and chassis axis convention on
+hardware before driving.
 
 The bridge receives `team_info`, `game_info`, `online_info`, `offline_info`,
 and `radar_info`, and publishes the corresponding ROS status topics. Behavior angles are converted to radians.
@@ -30,7 +36,8 @@ without the physical USB link. For standalone launch:
 ros2 launch ros2_libxr ros2_libxr_launch.py
 ```
 
-Parameters include `chassis_cmd_topic`, `chassis_yaw_offset`, `behavior_topic`, `baudrate` (921600),
+Parameters include `cmd_topic`, `command_timeout`, `odom_topic`, `odom_frame`,
+`odom_timeout`, `rotate_latency`, `chassis_yaw_offset`, `behavior_topic`, `baudrate` (921600),
 `usb_vid` (`16d0`), `usb_pid` (`1492`), and `control_interface`
 (`XRUSB Navigation Control`).
 

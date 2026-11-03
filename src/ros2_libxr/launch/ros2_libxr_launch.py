@@ -6,7 +6,12 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 def generate_launch_description():
     return LaunchDescription([
-        DeclareLaunchArgument('chassis_cmd_topic', default_value='/chassis_cmd_mpc'),
+        DeclareLaunchArgument('cmd_topic', default_value='/cmd_vel_mpc'),
+        DeclareLaunchArgument('command_timeout', default_value='0.15'),
+        DeclareLaunchArgument('odom_topic', default_value='/aft_mapped_to_init'),
+        DeclareLaunchArgument('odom_frame', default_value='camera_init'),
+        DeclareLaunchArgument('odom_timeout', default_value='0.3'),
+        DeclareLaunchArgument('rotate_latency', default_value='0.02'),
         DeclareLaunchArgument('chassis_yaw_offset', default_value='0.0'),
         DeclareLaunchArgument('behavior_topic', default_value='/sentry/behaivor_send'),
         DeclareLaunchArgument('baudrate', default_value='921600'),
@@ -20,7 +25,15 @@ def generate_launch_description():
         output='both',
         emulate_tty=True,
         parameters=[{
-            'chassis_cmd_topic': LaunchConfiguration('chassis_cmd_topic'),
+            'cmd_topic': LaunchConfiguration('cmd_topic'),
+            'command_timeout': ParameterValue(
+                LaunchConfiguration('command_timeout'), value_type=float),
+            'odom_topic': LaunchConfiguration('odom_topic'),
+            'odom_frame': LaunchConfiguration('odom_frame'),
+            'odom_timeout': ParameterValue(
+                LaunchConfiguration('odom_timeout'), value_type=float),
+            'rotate_latency': ParameterValue(
+                LaunchConfiguration('rotate_latency'), value_type=float),
             'chassis_yaw_offset': ParameterValue(
                 LaunchConfiguration('chassis_yaw_offset'), value_type=float),
             'behavior_topic': LaunchConfiguration('behavior_topic'),
