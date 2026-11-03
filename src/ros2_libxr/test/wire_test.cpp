@@ -36,7 +36,7 @@ int main()
   }
 
   using namespace ros2_libxr::wire;
-  assert(sizeof(ChassisTarget) == 45);
+  assert(sizeof(ChassisTarget) == 13);
   assert(sizeof(BehaviorData) == 26);
   assert(sizeof(TeamInfo) == 48);
   assert(sizeof(GameInfo) == 22);
@@ -71,8 +71,7 @@ int main()
     wire.wz = 3.0F;
     wire.speed = true;
     assert(wire.vx == 1.25F && wire.wz == 3.0F && wire.speed);
-    assert(offsetof(ChassisTarget, wz) == 8 && offsetof(ChassisTarget, speed) == 40 &&
-           offsetof(ChassisTarget, delta_yaw) == 41);
+    assert(offsetof(ChassisTarget, wz) == 8 && offsetof(ChassisTarget, speed) == 12);
 
     const TimedSetpoint world{{1.0F, 0.0F, 0.5F}, 10.0, 100.0};
     const TimedHeading heading{M_PI / 2.0, 0.0, 10.0, 100.0};

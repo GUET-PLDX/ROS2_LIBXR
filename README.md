@@ -8,8 +8,8 @@ its LibXR transport implementation.
 
 The bridge subscribes to `/cmd_vel_mpc` and `/sentry/behaivor_send` and
 publishes `nav_data` and `behavior_data` at 100 Hz over navigation USB CDC.
-`nav_data` uses the 45-byte packed velocity protocol. Its first three float32
-values are chassis-frame `vx`, `vy` (m/s) and `wz` (rad/s). The bridge rotates
+`nav_data` uses a 13-byte packed velocity protocol: three float32 values for
+chassis-frame `vx`, `vy` (m/s) and `wz` (rad/s), followed by a validity flag. The bridge rotates
 the MPC's `camera_init` velocity using LIO yaw plus `chassis_yaw_offset` and
 projects heading over odometry age plus `rotate_latency`.
 
@@ -20,8 +20,7 @@ payload with the speed-control flag cleared; the matching firmware revokes AI
 chassis control. A fresh intentional zero velocity keeps the flag set.
 
 MC02 firmware must include the matching HostDataLink, DualBoard and Chassis
-module revisions and both boards must be updated together. Older 12-byte wrench
-firmware is incompatible. Verify the yaw offset and chassis axis convention on
+module revisions and both boards must be updated together. Verify the yaw offset and chassis axis convention on
 hardware before driving.
 
 The bridge receives `team_info`, `game_info`, `online_info`, `offline_info`,

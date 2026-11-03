@@ -247,8 +247,6 @@ public:
       cmd_topic.c_str(),
       static_cast<long>(baud),
       iface.c_str());
-    RCLCPP_WARN(
-      get_logger(), "Velocity downlink requires firmware supporting the legacy 45-byte nav_data protocol");
   }
 
 private:

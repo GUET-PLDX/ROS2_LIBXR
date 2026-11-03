@@ -8,9 +8,8 @@ namespace ros2_libxr::wire {
 #pragma pack(push, 1)
 struct ChassisTarget
 {
-  float vx, vy, wz, yaw, cvx, cvy, cw, fx, fy, fw;
+  float vx, vy, wz;
   bool speed;
-  float delta_yaw;
 };
 struct BehaviorData
 {
@@ -73,7 +72,7 @@ struct RadarInfo
   bool sensed;
 };
 #pragma pack(pop)
-static_assert(sizeof(ChassisTarget) == 45 && sizeof(BehaviorData) == 26);
+static_assert(sizeof(ChassisTarget) == 13 && sizeof(BehaviorData) == 26);
 static_assert(sizeof(TeamInfo) == 48 && sizeof(GameInfo) == 22);
 static_assert(sizeof(OnlineInfo) == 37 && sizeof(OfflineInfo) == 16 && sizeof(RadarInfo) == 59);
 constexpr float DegreesToRadians(float degrees)
