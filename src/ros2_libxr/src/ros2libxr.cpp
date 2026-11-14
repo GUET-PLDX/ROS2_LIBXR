@@ -1,3 +1,4 @@
+#include "ros2_libxr/navigation_link.hpp"
 #include "ros2_libxr/velocity_command.hpp"
 #include "ros2_libxr/wire.hpp"
 
@@ -35,46 +36,49 @@ using ros2_libxr::WorldToBody;
 class NavigationLink final : public rclcpp::Node
 {
 public:
-  NavigationLink() : Node("ros2_libxr")
+  explicit NavigationLink(ros2_libxr::NavigationOutput output)
+  : Node("ros2_libxr"), output_(std::move(output))
   {
     const auto baud = declare_parameter<int>("baudrate", 921600);
     const auto vid = declare_parameter<std::string>("usb_vid", "16d0");
     const auto pid = declare_parameter<std::string>("usb_pid", "1492");
     const auto iface = declare_parameter<std::string>("control_interface", "XRUSB Navigation Control");
     const auto behavior_topic = declare_parameter<std::string>("behavior_topic", "/sentry/behaivor_send");
-    LibXR::PlatformInit();
-    uart_ = std::make_unique<LibXR::LinuxUART>(
-      vid, pid, iface, static_cast<unsigned int>(baud), LibXR::LinuxUART::Parity::NO_PARITY, 8, 1);
-    ramfs_ = std::make_unique<LibXR::RamFS>();
-    terminal_ = std::make_unique<LibXR::Terminal<1024, 64, 16, 128>>(*ramfs_);
-    terminal_thread_ = std::make_unique<LibXR::Thread>();
-    terminal_thread_->Create(terminal_.get(),
-      LibXR::Terminal<1024, 64, 16, 128>::ThreadFun,
-      "terminal",
-      81900,
-      LibXR::Thread::Priority::MEDIUM);
+    if (!output_) {
+      LibXR::PlatformInit();
+      uart_ = std::make_unique<LibXR::LinuxUART>(
+        vid, pid, iface, static_cast<unsigned int>(baud), LibXR::LinuxUART::Parity::NO_PARITY, 8, 1);
+      ramfs_ = std::make_unique<LibXR::RamFS>();
+      terminal_ = std::make_unique<LibXR::Terminal<1024, 64, 16, 128>>(*ramfs_);
+      terminal_thread_ = std::make_unique<LibXR::Thread>();
+      terminal_thread_->Create(terminal_.get(),
+        LibXR::Terminal<1024, 64, 16, 128>::ThreadFun,
+        "terminal",
+        81900,
+        LibXR::Thread::Priority::MEDIUM);
 
-    nav_ = LibXR::Topic::CreateTopic<ChassisTarget>("nav_data");
-    behavior_ = LibXR::Topic::CreateTopic<BehaviorData>("behavior_data");
-    team_ = LibXR::Topic::CreateTopic<TeamInfo>("team_info");
-    game_ = LibXR::Topic::CreateTopic<GameInfo>("game_info");
-    online_ = LibXR::Topic::CreateTopic<OnlineInfo>("online_info");
-    offline_ = LibXR::Topic::CreateTopic<OfflineInfo>("offline_info");
-    radar_ = LibXR::Topic::CreateTopic<RadarInfo>("radar_info");
-    LibXR::HardwareContainer hw{LibXR::Entry<LibXR::RamFS>({*ramfs_, {"ramfs"}}),
-      LibXR::Entry<LibXR::UART>({*uart_, {"uart_client"}})};
-    static LibXR::ApplicationManager manager;
-    static auto rx = std::make_unique<SharedTopic>(hw,
-      manager,
-      "uart_client",
-      256,
-      std::initializer_list<SharedTopic::TopicConfig>{
-        {"team_info"}, {"game_info"}, {"online_info"}, {"offline_info"}, {"radar_info"}});
-    static auto tx = std::make_unique<SharedTopicClient>(hw,
-      manager,
-      "uart_client",
-      16,
-      std::initializer_list<SharedTopicClient::TopicConfig>{{"nav_data"}, {"behavior_data"}});
+      nav_ = LibXR::Topic::CreateTopic<ChassisTarget>("nav_data");
+      behavior_ = LibXR::Topic::CreateTopic<BehaviorData>("behavior_data");
+      team_ = LibXR::Topic::CreateTopic<TeamInfo>("team_info");
+      game_ = LibXR::Topic::CreateTopic<GameInfo>("game_info");
+      online_ = LibXR::Topic::CreateTopic<OnlineInfo>("online_info");
+      offline_ = LibXR::Topic::CreateTopic<OfflineInfo>("offline_info");
+      radar_ = LibXR::Topic::CreateTopic<RadarInfo>("radar_info");
+      LibXR::HardwareContainer hw{LibXR::Entry<LibXR::RamFS>({*ramfs_, {"ramfs"}}),
+        LibXR::Entry<LibXR::UART>({*uart_, {"uart_client"}})};
+      static LibXR::ApplicationManager manager;
+      static auto rx = std::make_unique<SharedTopic>(hw,
+        manager,
+        "uart_client",
+        256,
+        std::initializer_list<SharedTopic::TopicConfig>{
+          {"team_info"}, {"game_info"}, {"online_info"}, {"offline_info"}, {"radar_info"}});
+      static auto tx = std::make_unique<SharedTopicClient>(hw,
+        manager,
+        "uart_client",
+        16,
+        std::initializer_list<SharedTopicClient::TopicConfig>{{"nav_data"}, {"behavior_data"}});
+    }
 
     const auto cmd_topic = declare_parameter<std::string>("cmd_topic", "/cmd_vel_mpc");
     command_timeout_ = declare_parameter<double>("command_timeout", 0.15);
@@ -139,6 +143,11 @@ public:
         d.tunnel_angle = DegreesToRadians(m->tunnel_align_angle_deg);
         d.gyro = m->use_gyro_mode;
         last_behavior_ = d;
+        tunnelPrepareActive_ = m->tunnel_prepare_active;
+        tunnelReady_ = m->tunnel_ready;
+        tunnelEscapeActive_ = m->tunnel_escape_active;
+        tunnelEscapeVx_ = m->tunnel_escape_vx;
+        tunnelEscapeVy_ = m->tunnel_escape_vy;
       });
     team_pub_ = create_publisher<ros_interfaces::msg::TeamInformation>("/sentry/team_info", 10);
     game_pub_ = create_publisher<ros_interfaces::msg::GameInfo>("/sentry/game_info", 10);
@@ -224,7 +233,9 @@ public:
       const double t = now().seconds();
       const double steady_now = steadySeconds();
       bool valid = false;
-      const ChassisSetpoint cmd = WorldToBody(chassis_cmd_,
+      // Validate the original stream first: an override must not revive an
+      // expired, non-finite or unrepresentable navigation command.
+      ChassisSetpoint cmd = WorldToBody(chassis_cmd_,
         heading_,
         t,
         steady_now,
@@ -233,14 +244,39 @@ public:
         rotate_latency_,
         chassis_yaw_offset_,
         &valid);
+      if (valid && (tunnelEscapeActive_ || (tunnelPrepareActive_ && !tunnelReady_))) {
+        auto selectedCommand = chassis_cmd_;
+        if (tunnelEscapeActive_) {
+          selectedCommand.value.vx = tunnelEscapeVx_;
+          selectedCommand.value.vy = tunnelEscapeVy_;
+        }
+        if (tunnelPrepareActive_ && !tunnelReady_) {
+          selectedCommand.value.vx *= 0.15F;
+          selectedCommand.value.vy *= 0.15F;
+        }
+        // Escape velocities are world-frame values, just like navigation XY.
+        cmd = WorldToBody(selectedCommand,
+          heading_,
+          t,
+          steady_now,
+          command_timeout_,
+          odom_timeout_,
+          rotate_latency_,
+          chassis_yaw_offset_,
+          &valid);
+      }
       ChassisTarget d{};
       d.vx = cmd.vx;
       d.vy = cmd.vy;
       d.wz = cmd.wz;
       d.speed = valid;
-      nav_.Publish(d);
       BehaviorData b = last_behavior_;
-      behavior_.Publish(b);
+      if (output_) {
+        output_(d, b);
+      } else {
+        nav_.Publish(d);
+        behavior_.Publish(b);
+      }
     });
     RCLCPP_INFO(get_logger(),
       "USB navigation link configured: %s:%ld baud, control interface '%s'",
@@ -257,6 +293,9 @@ private:
 
   template <class T> void Register(LibXR::Topic & topic, std::function<void(const T &)> fn)
   {
+    if (output_) {
+      return;
+    }
     using Bound = std::function<void(const T &)>;
     auto cb = LibXR::Topic::Callback::Create(
       [](bool, Bound handler, T & value) {
@@ -266,6 +305,7 @@ private:
     topic.RegisterCallback(cb);
     callbacks_.push_back(std::move(cb));
   }
+  ros2_libxr::NavigationOutput output_;
   std::unique_ptr<LibXR::LinuxUART> uart_;
   std::unique_ptr<LibXR::RamFS> ramfs_;
   std::unique_ptr<LibXR::Terminal<1024, 64, 16, 128>> terminal_;
@@ -281,6 +321,11 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   BehaviorData last_behavior_{};
+  bool tunnelPrepareActive_{false};
+  bool tunnelReady_{false};
+  bool tunnelEscapeActive_{false};
+  float tunnelEscapeVx_{0.0F};
+  float tunnelEscapeVy_{0.0F};
   rclcpp::Subscription<ros_interfaces::msg::Behavior>::SharedPtr behavior_sub_;
   rclcpp::Publisher<ros_interfaces::msg::TeamInformation>::SharedPtr team_pub_;
   rclcpp::Publisher<ros_interfaces::msg::GameInfo>::SharedPtr game_pub_;
@@ -291,10 +336,20 @@ private:
 };
 }  // namespace
 
+namespace ros2_libxr {
+std::shared_ptr<rclcpp::Node> createNavigationLink(NavigationOutput output)
+{
+  return std::make_shared<NavigationLink>(std::move(output));
+}
+}  // namespace ros2_libxr
+
+#ifndef ROS2_LIBXR_NO_MAIN
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<NavigationLink>());
+  rclcpp::spin(ros2_libxr::createNavigationLink());
   rclcpp::shutdown();
   return 0;
 }
+
+#endif
