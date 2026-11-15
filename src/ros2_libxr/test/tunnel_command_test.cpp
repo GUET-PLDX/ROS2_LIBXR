@@ -102,7 +102,7 @@ protected:
   bool publish_velocity_{true}, publish_odometry_{true};
 };
 
-TEST_F(TunnelCommandTest, PreparationSlowsFinalCommandAndReadinessRestoresIt)
+TEST_F(TunnelCommandTest, PreparationStateDoesNotModifyFinalCommand)
 {
   ASSERT_TRUE(waitFor(
     [this] {
@@ -112,7 +112,7 @@ TEST_F(TunnelCommandTest, PreparationSlowsFinalCommandAndReadinessRestoresIt)
   behavior_message_.tunnel_prepare_active = true;
   ASSERT_TRUE(waitFor(
     [this] {
-      return matches(0.15F, -0.06F);
+      return matches(1.0F, -0.4F);
     },
     true));
   behavior_message_.tunnel_ready = true;
@@ -122,7 +122,7 @@ TEST_F(TunnelCommandTest, PreparationSlowsFinalCommandAndReadinessRestoresIt)
     },
     true));
 }
-TEST_F(TunnelCommandTest, EscapeReplacesNavigationBeforePreparationSlowdown)
+TEST_F(TunnelCommandTest, TunnelStateDoesNotOverrideNavigationCommand)
 {
   yaw_ = M_PI / 2.0;
   behavior_message_.tunnel_escape_active = true;
@@ -132,11 +132,9 @@ TEST_F(TunnelCommandTest, EscapeReplacesNavigationBeforePreparationSlowdown)
     for (const bool ready : {false, true}) {
       behavior_message_.tunnel_prepare_active = prepare;
       behavior_message_.tunnel_ready = ready;
-      const float x = prepare && !ready ? 0.03F : 0.2F;
-      const float y = prepare && !ready ? 0.06F : 0.4F;
       ASSERT_TRUE(waitFor(
-        [this, x, y] {
-          return matches(x, y);
+        [this] {
+          return matches(-0.4F, -1.0F);
         },
         true));
       const int baseline = outputs_;
@@ -145,7 +143,7 @@ TEST_F(TunnelCommandTest, EscapeReplacesNavigationBeforePreparationSlowdown)
           return outputs_ >= baseline + 25;
         },
         true));
-      EXPECT_TRUE(matches(x, y));
+      EXPECT_TRUE(matches(-0.4F, -1.0F));
     }
   }
   behavior_message_.tunnel_escape_active = false;
@@ -165,11 +163,9 @@ TEST_F(TunnelCommandTest, PreparationTruthTablePreservesYawAndDoesNotAccumulateS
     for (const bool ready : {false, true}) {
       behavior_message_.tunnel_prepare_active = prepare;
       behavior_message_.tunnel_ready = ready;
-      const float x = prepare && !ready ? 0.15F : 1.0F;
-      const float y = prepare && !ready ? -0.06F : -0.4F;
       ASSERT_TRUE(waitFor(
-        [this, x, y] {
-          return matches(x, y);
+        [this] {
+          return matches(1.0F, -0.4F);
         },
         true));
       const int baseline = outputs_;
@@ -178,7 +174,7 @@ TEST_F(TunnelCommandTest, PreparationTruthTablePreservesYawAndDoesNotAccumulateS
           return outputs_ >= baseline + 25;
         },
         true));
-      EXPECT_TRUE(matches(x, y));
+      EXPECT_TRUE(matches(1.0F, -0.4F));
       EXPECT_TRUE(wire_behavior_.tunnel);
       EXPECT_TRUE(wire_behavior_.gyro);
       EXPECT_NEAR(wire_behavior_.tunnel_angle, 1.57079633F, 1e-5F);
@@ -193,7 +189,7 @@ TEST_F(TunnelCommandTest, PreparationTruthTablePreservesYawAndDoesNotAccumulateS
     true));
 }
 
-TEST_F(TunnelCommandTest, OverridesCannotReviveInvalidNavigationOrOdometry)
+TEST_F(TunnelCommandTest, InvalidNavigationOrOdometryCannotBeRevivedByTunnelState)
 {
   behavior_message_.tunnel_escape_active = true;
   behavior_message_.tunnel_escape_vx = -0.4F;
@@ -206,7 +202,7 @@ TEST_F(TunnelCommandTest, OverridesCannotReviveInvalidNavigationOrOdometry)
     velocity_message_.linear.x = 1.0;
     ASSERT_TRUE(waitFor(
       [this] {
-        return matches(-0.06F, 0.03F);
+        return matches(1.0F, -0.4F);
       },
       true));
     velocity_message_.linear.x = invalid;
@@ -215,7 +211,7 @@ TEST_F(TunnelCommandTest, OverridesCannotReviveInvalidNavigationOrOdometry)
   velocity_message_.linear.x = 1.0;
   ASSERT_TRUE(waitFor(
     [this] {
-      return matches(-0.06F, 0.03F);
+      return matches(1.0F, -0.4F);
     },
     true));
   publish_velocity_ = false;
@@ -223,7 +219,7 @@ TEST_F(TunnelCommandTest, OverridesCannotReviveInvalidNavigationOrOdometry)
   publish_velocity_ = true;
   ASSERT_TRUE(waitFor(
     [this] {
-      return matches(-0.06F, 0.03F);
+      return matches(1.0F, -0.4F);
     },
     true));
   publish_odometry_ = false;
@@ -231,10 +227,14 @@ TEST_F(TunnelCommandTest, OverridesCannotReviveInvalidNavigationOrOdometry)
   publish_odometry_ = true;
   ASSERT_TRUE(waitFor(
     [this] {
-      return matches(-0.06F, 0.03F);
+      return matches(1.0F, -0.4F);
     },
     true));
   behavior_message_.tunnel_escape_vx = NAN;
-  ASSERT_TRUE(waitFor(stopped, true));
+  ASSERT_TRUE(waitFor(
+    [this] {
+      return matches(1.0F, -0.4F);
+    },
+    true));
 }
 }  // namespace

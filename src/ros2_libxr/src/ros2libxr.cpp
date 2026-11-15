@@ -143,11 +143,6 @@ public:
         d.tunnel_angle = DegreesToRadians(m->tunnel_align_angle_deg);
         d.gyro = m->use_gyro_mode;
         last_behavior_ = d;
-        tunnelPrepareActive_ = m->tunnel_prepare_active;
-        tunnelReady_ = m->tunnel_ready;
-        tunnelEscapeActive_ = m->tunnel_escape_active;
-        tunnelEscapeVx_ = m->tunnel_escape_vx;
-        tunnelEscapeVy_ = m->tunnel_escape_vy;
       });
     team_pub_ = create_publisher<ros_interfaces::msg::TeamInformation>("/sentry/team_info", 10);
     game_pub_ = create_publisher<ros_interfaces::msg::GameInfo>("/sentry/game_info", 10);
@@ -244,27 +239,6 @@ public:
         rotate_latency_,
         chassis_yaw_offset_,
         &valid);
-      if (valid && (tunnelEscapeActive_ || (tunnelPrepareActive_ && !tunnelReady_))) {
-        auto selectedCommand = chassis_cmd_;
-        if (tunnelEscapeActive_) {
-          selectedCommand.value.vx = tunnelEscapeVx_;
-          selectedCommand.value.vy = tunnelEscapeVy_;
-        }
-        if (tunnelPrepareActive_ && !tunnelReady_) {
-          selectedCommand.value.vx *= 0.15F;
-          selectedCommand.value.vy *= 0.15F;
-        }
-        // Escape velocities are world-frame values, just like navigation XY.
-        cmd = WorldToBody(selectedCommand,
-          heading_,
-          t,
-          steady_now,
-          command_timeout_,
-          odom_timeout_,
-          rotate_latency_,
-          chassis_yaw_offset_,
-          &valid);
-      }
       ChassisTarget d{};
       d.vx = cmd.vx;
       d.vy = cmd.vy;
@@ -321,11 +295,6 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   BehaviorData last_behavior_{};
-  bool tunnelPrepareActive_{false};
-  bool tunnelReady_{false};
-  bool tunnelEscapeActive_{false};
-  float tunnelEscapeVx_{0.0F};
-  float tunnelEscapeVy_{0.0F};
   rclcpp::Subscription<ros_interfaces::msg::Behavior>::SharedPtr behavior_sub_;
   rclcpp::Publisher<ros_interfaces::msg::TeamInformation>::SharedPtr team_pub_;
   rclcpp::Publisher<ros_interfaces::msg::GameInfo>::SharedPtr game_pub_;
