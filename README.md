@@ -33,10 +33,14 @@ components by 0.15. This keeps decision behavior in the controller output and
 leaves this bridge responsible for freshness checks, world-to-chassis rotation,
 and protocol transmission.
 
-This bridge does not change `wz`, select escape motion, or apply the 0.15 scale.
-It forwards the already-shaped `/cmd_vel_mpc` command after the existing input
-and odometry validity checks. The wire ABI is unchanged, and Behavior state is
-still forwarded to the firmware for its existing fields.
+## Navigation rotor speed
+
+With fresh `use_gyro_mode` enabled and valid navigation and odometry, the bridge
+converts the signed `Behavior.gyro_vel` from rpm to rad/s and sends it in
+`nav_data.wz`. The chassis applies its angular-speed limit and rotor scaling.
+An invalid gyro speed or a Behavior timeout of 300 ms clears gyro mode and
+restores the MPC yaw command. Update the bridge and chassis firmware together
+for this behavior.
 
 The bridge receives `team_info`, `game_info`, `online_info`, `offline_info`,
 and `radar_info`, and publishes the corresponding ROS status topics. Behavior angles are converted to radians.

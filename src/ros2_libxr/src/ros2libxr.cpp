@@ -6,6 +6,7 @@
 #include <cmath>
 #include <functional>
 #include <memory>
+#include <numbers>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -143,7 +144,10 @@ public:
         d.capacitor = m->use_capacitor;
         d.tunnel = m->tunnel_align_active;
         d.tunnel_angle = DegreesToRadians(m->tunnel_align_angle_deg);
-        d.gyro = m->use_gyro_mode;
+        const float gyro_rate = m->gyro_vel * (std::numbers::pi_v<float> / 30.0F);
+        d.gyro = m->use_gyro_mode && std::isfinite(gyro_rate) &&
+          std::abs(gyro_rate) <= ros2_libxr::kWireVelocityLimit;
+        last_gyro_rate_rad_s_ = d.gyro ? gyro_rate : 0.0F;
         last_behavior_ = d;
         last_behavior_time_ = std::chrono::steady_clock::now();
       });
@@ -251,7 +255,12 @@ public:
       d.speed = valid;
       BehaviorData b = last_behavior_;
       if (std::chrono::steady_clock::now() - last_behavior_time_ > 300ms) {
-        b.stance = 0U;
+        b.stance = 0;
+        b.gyro = false;
+      }
+      b.gyro = b.gyro && valid;
+      if (b.gyro) {
+        d.wz = last_gyro_rate_rad_s_;
       }
       if (output_) {
         output_(d, b);
@@ -306,6 +315,7 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   BehaviorData last_behavior_{};
+  float last_gyro_rate_rad_s_{0.0F};
   std::chrono::steady_clock::time_point last_behavior_time_{};
   rclcpp::Subscription<ros_interfaces::msg::Behavior>::SharedPtr behavior_sub_;
   rclcpp::Publisher<ros_interfaces::msg::TeamInformation>::SharedPtr team_pub_;

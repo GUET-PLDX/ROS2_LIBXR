@@ -3,6 +3,8 @@
 #include <cmath>
 
 namespace ros2_libxr {
+inline constexpr double kWireVelocityLimit = 32.767;
+
 struct ChassisSetpoint
 {
   float vx{0.0F}, vy{0.0F}, wz{0.0F};  // m/s and rad/s
@@ -71,9 +73,8 @@ inline ChassisSetpoint WorldToBody(const TimedSetpoint & command,
   const double vx = c * world.vx + s * world.vy;
   const double vy = -s * world.vx + c * world.vy;
   // The inter-board velocity format stores signed values at 0.001 resolution.
-  constexpr double kWireLimit = 32.767;
-  if (!std::isfinite(vx) || !std::isfinite(vy) || std::abs(vx) > kWireLimit || std::abs(vy) > kWireLimit ||
-      std::abs(world.wz) > kWireLimit) {
+  if (!std::isfinite(vx) || !std::isfinite(vy) || std::abs(vx) > kWireVelocityLimit ||
+      std::abs(vy) > kWireVelocityLimit || std::abs(world.wz) > kWireVelocityLimit) {
     return {};
   }
   if (valid) {

@@ -5,7 +5,9 @@
 #include <functional>
 #include <geometry_msgs/msg/twist.hpp>
 #include <gtest/gtest.h>
+#include <limits>
 #include <nav_msgs/msg/odometry.hpp>
+#include <numbers>
 #include <ros_interfaces/msg/behavior.hpp>
 #include <thread>
 
@@ -79,7 +81,9 @@ protected:
     if (publish_velocity_) {
       velocity_->publish(velocity_message_);
     }
-    behavior_->publish(behavior_message_);
+    if (publish_behavior_) {
+      behavior_->publish(behavior_message_);
+    }
   }
 
   bool matches(float vx, float vy, float wz = 0.5F) const
@@ -99,7 +103,7 @@ protected:
   ros2_libxr::wire::BehaviorData wire_behavior_{};
   int outputs_{0};
   double yaw_{0.0};
-  bool publish_velocity_{true}, publish_odometry_{true};
+  bool publish_velocity_{true}, publish_odometry_{true}, publish_behavior_{true};
 };
 
 TEST_F(TunnelCommandTest, PreparationStateDoesNotModifyFinalCommand)
@@ -122,6 +126,7 @@ TEST_F(TunnelCommandTest, PreparationStateDoesNotModifyFinalCommand)
     },
     true));
 }
+
 TEST_F(TunnelCommandTest, StanceRequestExpiresWithoutNewBehavior)
 {
   behavior_message_.desired_stance = 3U;
@@ -145,6 +150,49 @@ TEST_F(TunnelCommandTest, ForwardsStanceRequestsUnchanged)
       },
       true));
   }
+}
+
+TEST_F(TunnelCommandTest, GyroSpeedUsesSignedRadiansPerSecondOnlyInGyroMode)
+{
+  behavior_message_.gyro_vel = 60.0F;
+  ASSERT_TRUE(waitFor([this] { return matches(1.0F, -0.4F) && !wire_behavior_.gyro; }, true));
+
+  behavior_message_.use_gyro_mode = true;
+  for (const float turns_per_second : {1.0F, -1.0F, 0.0F}) {
+    behavior_message_.gyro_vel = 60.0F * turns_per_second;
+    const float expected_yaw_rate = 2.0F * std::numbers::pi_v<float> * turns_per_second;
+    ASSERT_TRUE(waitFor([this, expected_yaw_rate] {
+      return matches(1.0F, -0.4F, expected_yaw_rate) && wire_behavior_.gyro;
+    }, true));
+  }
+
+  for (const float invalid_rpm : {std::numeric_limits<float>::quiet_NaN(),
+         std::numeric_limits<float>::infinity(), 400.0F}) {
+    behavior_message_.gyro_vel = 60.0F;
+    ASSERT_TRUE(waitFor([this] { return wire_behavior_.gyro; }, true));
+    behavior_message_.gyro_vel = invalid_rpm;
+    ASSERT_TRUE(waitFor([this] { return matches(1.0F, -0.4F) && !wire_behavior_.gyro; }, true));
+  }
+}
+
+TEST_F(TunnelCommandTest, GyroSpeedExpiresIndependentlyOfNavigation)
+{
+  behavior_message_.use_gyro_mode = true;
+  behavior_message_.gyro_vel = -60.0F;
+  const auto spinning = [this] {
+    return matches(1.0F, -0.4F, -2.0F * std::numbers::pi_v<float>) && wire_behavior_.gyro;
+  };
+  ASSERT_TRUE(waitFor(spinning, true));
+
+  publish_behavior_ = false;
+  ASSERT_TRUE(waitFor([this] { return matches(1.0F, -0.4F) && !wire_behavior_.gyro; }, true));
+
+  publish_behavior_ = true;
+  ASSERT_TRUE(waitFor(spinning, true));
+  publish_velocity_ = false;
+  EXPECT_TRUE(waitFor([this] {
+    return !command_.speed && command_.wz == 0.0F && !wire_behavior_.gyro;
+  }, true));
 }
 
 TEST_F(TunnelCommandTest, TunnelStateDoesNotOverrideNavigationCommand)
@@ -184,6 +232,7 @@ TEST_F(TunnelCommandTest, PreparationTruthTablePreservesYawAndDoesNotAccumulateS
   behavior_message_.tunnel_align_active = true;
   behavior_message_.tunnel_align_angle_deg = 90.0F;
   behavior_message_.use_gyro_mode = true;
+  behavior_message_.gyro_vel = 15.0F / std::numbers::pi_v<float>;
   for (const bool prepare : {false, true}) {
     for (const bool ready : {false, true}) {
       behavior_message_.tunnel_prepare_active = prepare;
@@ -206,6 +255,7 @@ TEST_F(TunnelCommandTest, PreparationTruthTablePreservesYawAndDoesNotAccumulateS
     }
   }
   behavior_message_.tunnel_ready = false;
+  behavior_message_.use_gyro_mode = false;
   velocity_message_ = geometry_msgs::msg::Twist{};
   ASSERT_TRUE(waitFor(
     [this] {
