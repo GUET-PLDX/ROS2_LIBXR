@@ -122,6 +122,45 @@ TEST_F(TunnelCommandTest, PreparationStateDoesNotModifyFinalCommand)
     },
     true));
 }
+TEST_F(TunnelCommandTest, StanceRequestExpiresWithoutNewBehavior)
+{
+  behavior_message_.desired_stance = 3U;
+  ASSERT_TRUE(waitFor(
+    [this] {
+      return wire_behavior_.stance == 3U;
+    },
+    true));
+  EXPECT_TRUE(waitFor([this] {
+    return wire_behavior_.stance == 0U;
+  }));
+}
+
+TEST_F(TunnelCommandTest, ForwardsOnlyBasicStanceRequests)
+{
+  for (const uint8_t stance : {1U, 2U, 3U}) {
+    behavior_message_.desired_stance = stance;
+    ASSERT_TRUE(waitFor(
+      [this, stance] {
+        return wire_behavior_.stance == stance;
+      },
+      true));
+  }
+  for (const uint8_t invalid_stance : {0U, 4U, 5U, 6U}) {
+    behavior_message_.desired_stance = 2U;
+    ASSERT_TRUE(waitFor(
+      [this] {
+        return wire_behavior_.stance == 2U;
+      },
+      true));
+    behavior_message_.desired_stance = invalid_stance;
+    ASSERT_TRUE(waitFor(
+      [this] {
+        return wire_behavior_.stance == 0U;
+      },
+      true));
+  }
+}
+
 TEST_F(TunnelCommandTest, TunnelStateDoesNotOverrideNavigationCommand)
 {
   yaw_ = M_PI / 2.0;

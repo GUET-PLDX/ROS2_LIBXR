@@ -127,7 +127,7 @@ public:
       behavior_topic, 10, [this](ros_interfaces::msg::Behavior::ConstSharedPtr m) {
         BehaviorData d{};
         d.pitch = m->pitch_mode;
-        d.stance = m->desired_stance;
+        d.stance = m->desired_stance <= 3U ? m->desired_stance : 0U;
         d.lifter = m->desire_lifter_pos;
         d.scan_min = DegreesToRadians(m->scan_yaw_min);
         d.scan_max = DegreesToRadians(m->scan_yaw_max);
@@ -143,6 +143,7 @@ public:
         d.tunnel_angle = DegreesToRadians(m->tunnel_align_angle_deg);
         d.gyro = m->use_gyro_mode;
         last_behavior_ = d;
+        last_behavior_time_ = std::chrono::steady_clock::now();
       });
     team_pub_ = create_publisher<ros_interfaces::msg::TeamInformation>("/sentry/team_info", 10);
     game_pub_ = create_publisher<ros_interfaces::msg::GameInfo>("/sentry/game_info", 10);
@@ -245,6 +246,9 @@ public:
       d.wz = cmd.wz;
       d.speed = valid;
       BehaviorData b = last_behavior_;
+      if (std::chrono::steady_clock::now() - last_behavior_time_ > 300ms) {
+        b.stance = 0U;
+      }
       if (output_) {
         output_(d, b);
       } else {
@@ -295,6 +299,7 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   BehaviorData last_behavior_{};
+  std::chrono::steady_clock::time_point last_behavior_time_{};
   rclcpp::Subscription<ros_interfaces::msg::Behavior>::SharedPtr behavior_sub_;
   rclcpp::Publisher<ros_interfaces::msg::TeamInformation>::SharedPtr team_pub_;
   rclcpp::Publisher<ros_interfaces::msg::GameInfo>::SharedPtr game_pub_;
