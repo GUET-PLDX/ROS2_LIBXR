@@ -127,7 +127,7 @@ public:
       behavior_topic, 10, [this](ros_interfaces::msg::Behavior::ConstSharedPtr m) {
         BehaviorData d{};
         d.pitch = m->pitch_mode;
-        d.stance = m->desired_stance <= 3U ? m->desired_stance : 0U;
+        d.stance = m->desired_stance;
         d.lifter = m->desire_lifter_pos;
         d.scan_min = DegreesToRadians(m->scan_yaw_min);
         d.scan_max = DegreesToRadians(m->scan_yaw_max);

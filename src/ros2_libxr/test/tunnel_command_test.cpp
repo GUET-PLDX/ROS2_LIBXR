@@ -135,27 +135,13 @@ TEST_F(TunnelCommandTest, StanceRequestExpiresWithoutNewBehavior)
   }));
 }
 
-TEST_F(TunnelCommandTest, ForwardsOnlyBasicStanceRequests)
+TEST_F(TunnelCommandTest, ForwardsStanceRequestsUnchanged)
 {
-  for (const uint8_t stance : {1U, 2U, 3U}) {
+  for (const uint8_t stance : {1U, 2U, 3U, 4U, 5U, 6U, 0U}) {
     behavior_message_.desired_stance = stance;
     ASSERT_TRUE(waitFor(
       [this, stance] {
         return wire_behavior_.stance == stance;
-      },
-      true));
-  }
-  for (const uint8_t invalid_stance : {0U, 4U, 5U, 6U}) {
-    behavior_message_.desired_stance = 2U;
-    ASSERT_TRUE(waitFor(
-      [this] {
-        return wire_behavior_.stance == 2U;
-      },
-      true));
-    behavior_message_.desired_stance = invalid_stance;
-    ASSERT_TRUE(waitFor(
-      [this] {
-        return wire_behavior_.stance == 0U;
       },
       true));
   }
