@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdlib>
+#include <vector>
 
 int main()
 {
@@ -39,8 +40,81 @@ int main()
   assert(sizeof(ChassisTarget) == 13);
   assert(sizeof(BehaviorData) == 26);
   assert(sizeof(TeamInfo) == 48);
-  assert(sizeof(GameInfo) == 22);
+  assert(sizeof(GameInfo) == 30);
   assert(sizeof(OnlineInfo) == 37);
+  {
+    // Independent wire bytes: two event words, all former fields, then controls.
+    const uint8_t bytes[]{0x34,
+      0x12,
+      0x78,
+      0x56,
+      0xef,
+      0xcd,
+      0xab,
+      0x89,
+      0x67,
+      0x45,
+      0x23,
+      0x01,
+      0x04,
+      0,
+      0,
+      0x80,
+      0x3f,
+      0,
+      0,
+      0,
+      0x40,
+      0x41,
+      0x22,
+      0x11,
+      0x44,
+      0x33,
+      0x66,
+      0x55,
+      0x88,
+      0x77};
+    GameInfo game{};
+    assert(DecodePayload(bytes, sizeof(bytes), game));
+    assert(game.remaining == 0x1234 && game.coins == 0x5678);
+    assert(game.events == 0x0123456789abcdefULL && game.status == 4);
+    assert(game.target_x == 1.0F && game.target_y == 2.0F && game.key == 0x41);
+    assert(game.enemy_outpost == 0x1122 && game.enemy_base == 0x3344);
+    assert(game.ally_control_degree == 0x5566 && game.enemy_control_degree == 0x7788);
+    assert(!DecodePayload(bytes, 22, game));
+    assert(!DecodePayload(bytes, 31, game));
+    assert(game.events == 0x0123456789abcdefULL);
+    struct Received
+    {
+      size_t valid = 0;
+      GameInfo game{};
+    } received;
+    LibXR::Topic incoming("referee_game_wire", 256);
+    auto callback = LibXR::Topic::Callback::Create(
+      [](bool, Received * target, const LibXR::ConstRawData & raw) {
+        if (DecodePayload(raw.addr_, raw.size_, target->game))
+          ++target->valid;
+      },
+      &received);
+    incoming.RegisterCallback(callback);
+    LibXR::Topic::Server server(256);
+    server.Register(LibXR::Topic::Find("referee_game_wire"));
+    for (const size_t length : {22U, 31U, 30U}) {
+      std::vector<uint8_t> payload(bytes, bytes + sizeof(bytes));
+      payload.resize(length, 0x5a);
+      std::vector<uint8_t> packet(LibXR::Topic::PACK_BASE_SIZE + length);
+      LibXR::Topic::PackData(LibXR::CRC32::Calculate("referee_game_wire", 17),
+        {packet.data(), packet.size()},
+        LibXR::MicrosecondTimestamp(123),
+        {payload.data(), payload.size()});
+      // Arbitrary stream chunks still go through LibXR's actual packet server.
+      server.ParseData({packet.data(), 9});
+      server.ParseData({packet.data() + 9, packet.size() - 9});
+      assert(received.valid == (length == 30 ? 1U : 0U));
+    }
+    assert(received.game.events == 0x0123456789abcdefULL);
+    assert(received.game.enemy_control_degree == 0x7788);
+  }
   assert(sizeof(OfflineInfo) == 16);
   assert(sizeof(RadarInfo) == 59);
   assert(std::fabs(DegreesToRadians(180.0F) - 3.14159265F) < 1e-5F);

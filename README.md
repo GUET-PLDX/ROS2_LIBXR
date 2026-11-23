@@ -62,3 +62,28 @@ declared in the current wire definition. They are copied numerically into ROS
 position fields; consumers must not treat them as meters until firmware defines
 the scale. The current firmware also does not transmit several fields available
 in the ROS Behavior and offline status messages.
+
+## 2027 referee telemetry migration
+
+Update the chassis, gimbal and this ROS workspace together. The referee CAN
+layout is version 2. `game_info` is now exactly 30 bytes: its previous field
+order is retained, `events` is a little-endian 64-bit value carrying both
+0x0101 words, and the final fields are the two little-endian uint16 control
+degrees (ally, enemy). The former 22-byte payload is rejected by the bridge;
+rolling back requires all three peers to return to matching versions.
+`ros_interfaces/msg/GameInfo.idl` and `.msg` carry the same widened event word
+and appended control degrees. Rebuild the message package and all consumers.
+
+`online_info` remains 37 bytes. The former energy percentage is unavailable in
+the 2027 referee protocol and is sent as 255. ROS forwards that sentinel; the
+behavior tree stores `ENERGY_UNKNOWN` instead of treating it as 255% or 0%.
+It does not force MOVE because energy is unknown, and energy-dependent
+reinforcement conditions remain unavailable until known feedback exists.
+
+The bridge decodes fixed-layout telemetry only when the incoming payload has
+the exact required length. The host tests cover literal 30-byte payloads,
+rejection of old/truncated or oversized payloads through the LibXR packet
+server, both event words and control degrees, 2027 event bits for red/blue,
+reserved ally slots, and the unknown-energy strategy behavior. Physical
+UART/CAN3 captures and the basic stance 1/2/3 loop still require the paired
+MC02 hardware acceptance described in firmware issue #30.

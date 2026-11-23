@@ -60,7 +60,9 @@ public:
       nav_ = LibXR::Topic::CreateTopic<ChassisTarget>("nav_data");
       behavior_ = LibXR::Topic::CreateTopic<BehaviorData>("behavior_data");
       team_ = LibXR::Topic::CreateTopic<TeamInfo>("team_info");
-      game_ = LibXR::Topic::CreateTopic<GameInfo>("game_info");
+      // Keep incoming length intact; Register checks the exact wire size before
+      // decoding. Topic::Server otherwise clamps oversize data to topic capacity.
+      game_ = LibXR::Topic("game_info", 256);
       online_ = LibXR::Topic::CreateTopic<OnlineInfo>("online_info");
       offline_ = LibXR::Topic::CreateTopic<OfflineInfo>("offline_info");
       radar_ = LibXR::Topic::CreateTopic<RadarInfo>("radar_info");
@@ -178,6 +180,8 @@ public:
       m.manual_key = d.key;
       m.enemy_outpost_hp = d.enemy_outpost;
       m.enemy_base_hp = d.enemy_base;
+      m.ally_control_degree = d.ally_control_degree;
+      m.enemy_control_degree = d.enemy_control_degree;
       game_pub_->publish(m);
     });
     Register<OnlineInfo>(online_, [this](const OnlineInfo & d) {
@@ -276,8 +280,11 @@ private:
     }
     using Bound = std::function<void(const T &)>;
     auto cb = LibXR::Topic::Callback::Create(
-      [](bool, Bound handler, T & value) {
-        handler(value);
+      [](bool, Bound handler, const LibXR::ConstRawData & data) {
+        T value{};
+        if (DecodePayload(data.addr_, data.size_, value)) {
+          handler(value);
+        }
       },
       std::move(fn));
     topic.RegisterCallback(cb);

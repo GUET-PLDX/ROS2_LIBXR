@@ -3,6 +3,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <type_traits>
 
 namespace ros2_libxr::wire {
 #pragma pack(push, 1)
@@ -35,11 +37,12 @@ struct TeamInfo
 struct GameInfo
 {
   uint16_t remaining, coins;
-  uint32_t events;
+  uint64_t events;
   uint8_t status;
   float target_x, target_y;
   uint8_t key;
   uint16_t enemy_outpost, enemy_base;
+  uint16_t ally_control_degree, enemy_control_degree;
 };
 struct OnlineInfo
 {
@@ -73,8 +76,18 @@ struct RadarInfo
 };
 #pragma pack(pop)
 static_assert(sizeof(ChassisTarget) == 13 && sizeof(BehaviorData) == 26);
-static_assert(sizeof(TeamInfo) == 48 && sizeof(GameInfo) == 22);
+static_assert(sizeof(TeamInfo) == 48 && sizeof(GameInfo) == 30);
 static_assert(sizeof(OnlineInfo) == 37 && sizeof(OfflineInfo) == 16 && sizeof(RadarInfo) == 59);
+// Decode complete fixed-layout payloads only. Old or truncated layouts never
+// reach the ROS publishers, even in builds with LibXR assertions disabled.
+template <typename T> bool DecodePayload(const void * bytes, size_t size, T & value)
+{
+  static_assert(std::is_trivially_copyable_v<T>);
+  if (size != sizeof(T))
+    return false;
+  std::memcpy(&value, bytes, sizeof(T));
+  return true;
+}
 constexpr float DegreesToRadians(float degrees)
 {
   return degrees * 0.01745329251994329577F;
