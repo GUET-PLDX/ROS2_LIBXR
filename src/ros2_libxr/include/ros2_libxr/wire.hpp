@@ -74,7 +74,14 @@ struct RadarInfo
   uint16_t coins, accumulated;
   bool sensed;
 };
+// Big Yaw joint state from one motor frame. The sample time is the LibXR packet
+// header timestamp (MCU microseconds), not a payload field.
+struct YawJointFeedback
+{
+  float angle_rad, velocity_rad_s;
+};
 #pragma pack(pop)
+static_assert(sizeof(YawJointFeedback) == 8);
 static_assert(sizeof(ChassisTarget) == 13 && sizeof(BehaviorData) == 26);
 static_assert(sizeof(TeamInfo) == 48 && sizeof(GameInfo) == 30);
 static_assert(sizeof(OnlineInfo) == 37 && sizeof(OfflineInfo) == 16 && sizeof(RadarInfo) == 59);

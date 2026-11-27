@@ -1,6 +1,7 @@
 #include "ros2_libxr/navigation_link.hpp"
 #include "ros2_libxr/velocity_command.hpp"
 #include "ros2_libxr/wire.hpp"
+#include "ros2_libxr/yaw_joint.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -20,6 +21,7 @@
 #include <ros_interfaces/msg/sentry_info_offline.hpp>
 #include <ros_interfaces/msg/sentry_info_online.hpp>
 #include <ros_interfaces/msg/team_information.hpp>
+#include <ros_interfaces/msg/yaw_joint_state.hpp>
 
 #include "SharedTopic/SharedTopic.hpp"
 #include "SharedTopicClient/SharedTopicClient.hpp"
@@ -67,6 +69,7 @@ public:
       online_ = LibXR::Topic::CreateTopic<OnlineInfo>("online_info");
       offline_ = LibXR::Topic::CreateTopic<OfflineInfo>("offline_info");
       radar_ = LibXR::Topic::CreateTopic<RadarInfo>("radar_info");
+      yaw_joint_ = LibXR::Topic::CreateTopic<YawJointFeedback>(ros2_libxr::kYawJointTopic);
       LibXR::HardwareContainer hw{LibXR::Entry<LibXR::RamFS>({*ramfs_, {"ramfs"}}),
         LibXR::Entry<LibXR::UART>({*uart_, {"uart_client"}})};
       static LibXR::ApplicationManager manager;
@@ -74,8 +77,12 @@ public:
         manager,
         "uart_client",
         256,
-        std::initializer_list<SharedTopic::TopicConfig>{
-          {"team_info"}, {"game_info"}, {"online_info"}, {"offline_info"}, {"radar_info"}});
+        std::initializer_list<SharedTopic::TopicConfig>{{"team_info"},
+          {"game_info"},
+          {"online_info"},
+          {"offline_info"},
+          {"radar_info"},
+          {ros2_libxr::kYawJointTopic}});
       static auto tx = std::make_unique<SharedTopicClient>(hw,
         manager,
         "uart_client",
@@ -146,7 +153,7 @@ public:
         d.tunnel_angle = DegreesToRadians(m->tunnel_align_angle_deg);
         const float gyro_rate = m->gyro_vel * (std::numbers::pi_v<float> / 30.0F);
         d.gyro = m->use_gyro_mode && std::isfinite(gyro_rate) &&
-          std::abs(gyro_rate) <= ros2_libxr::kWireVelocityLimit;
+                 std::abs(gyro_rate) <= ros2_libxr::kWireVelocityLimit;
         last_gyro_rate_rad_s_ = d.gyro ? gyro_rate : 0.0F;
         last_behavior_ = d;
         last_behavior_time_ = std::chrono::steady_clock::now();
@@ -156,6 +163,18 @@ public:
     online_pub_ = create_publisher<ros_interfaces::msg::SentryInfoOnline>("/sentry/online_info", 10);
     offline_pub_ = create_publisher<ros_interfaces::msg::SentryInfoOffline>("/sentry/offline_info", 10);
     radar_pub_ = create_publisher<ros_interfaces::msg::RadarInfo>("/sentry/radar_info", 10);
+    const auto joint_topic = declare_parameter<std::string>("yaw_joint_topic", "/sentry/yaw_joint_state");
+    const auto joint_frame = declare_parameter<std::string>("yaw_joint_frame", "base_link");
+    const auto joint_child_frame =
+      declare_parameter<std::string>("yaw_joint_child_frame", "lidar_yaw_mount");
+    const double clock_window = declare_parameter<double>("yaw_joint_clock_window", 5.0);
+    if (!std::isfinite(clock_window) || clock_window <= 0.0 || joint_frame.empty() ||
+        joint_child_frame.empty()) {
+      throw std::invalid_argument("Invalid yaw joint clock window or frame");
+    }
+    joint_clock_ = ros2_libxr::SourceClockMap(static_cast<int64_t>(clock_window * 1.0e9));
+    joint_pub_ =
+      create_publisher<ros_interfaces::msg::YawJointState>(joint_topic, rclcpp::QoS(200).reliable());
     Register<TeamInfo>(team_, [this](const TeamInfo & d) {
       ros_interfaces::msg::TeamInformation m;
       m.header.stamp = now();
@@ -233,6 +252,23 @@ public:
       }
       radar_pub_->publish(m);
     });
+    RegisterStamped<YawJointFeedback>(yaw_joint_,
+      [this, joint_frame, joint_child_frame](const YawJointFeedback & d, uint64_t mcu_stamp_us) {
+        ros2_libxr::YawJointSample sample;
+        const int64_t receive_ns = now().nanoseconds();
+        if (!ros2_libxr::DecodeYawJoint(&d, sizeof(d), mcu_stamp_us, receive_ns, joint_clock_, sample)) {
+          return;
+        }
+        ros_interfaces::msg::YawJointState m;
+        m.header.stamp = rclcpp::Time(sample.stamp_ns, get_clock()->get_clock_type());
+        m.header.frame_id = joint_frame;
+        m.child_frame_id = joint_child_frame;
+        m.angle = sample.angle;
+        m.velocity = sample.velocity;
+        m.mcu_stamp_us = sample.mcu_stamp_us;
+        m.receive_stamp = rclcpp::Time(sample.receive_ns, get_clock()->get_clock_type());
+        joint_pub_->publish(m);
+      });
     timer_ = create_wall_timer(10ms, [this] {
       const double t = now().seconds();
       const double steady_now = steadySeconds();
@@ -299,12 +335,32 @@ private:
     topic.RegisterCallback(cb);
     callbacks_.push_back(std::move(cb));
   }
+  // Same as Register, but also passes the source (MCU) packet timestamp.
+  template <class T> void RegisterStamped(LibXR::Topic & topic, std::function<void(const T &, uint64_t)> fn)
+  {
+    if (output_) {
+      return;
+    }
+    using Bound = std::function<void(const T &, uint64_t)>;
+    auto cb = LibXR::Topic::Callback::Create(
+      [](bool, Bound handler, LibXR::MicrosecondTimestamp stamp, const LibXR::ConstRawData & data) {
+        T value{};
+        if (DecodePayload(data.addr_, data.size_, value)) {
+          handler(value, static_cast<uint64_t>(stamp));
+        }
+      },
+      std::move(fn));
+    topic.RegisterCallback(cb);
+    callbacks_.push_back(std::move(cb));
+  }
   ros2_libxr::NavigationOutput output_;
   std::unique_ptr<LibXR::LinuxUART> uart_;
   std::unique_ptr<LibXR::RamFS> ramfs_;
   std::unique_ptr<LibXR::Terminal<1024, 64, 16, 128>> terminal_;
   std::unique_ptr<LibXR::Thread> terminal_thread_;
-  LibXR::Topic nav_, behavior_, team_, game_, online_, offline_, radar_;
+  LibXR::Topic nav_, behavior_, team_, game_, online_, offline_, radar_, yaw_joint_;
+  ros2_libxr::SourceClockMap joint_clock_;
+  rclcpp::Publisher<ros_interfaces::msg::YawJointState>::SharedPtr joint_pub_;
   std::vector<LibXR::Topic::Callback> callbacks_;
   ros2_libxr::TimedSetpoint chassis_cmd_;
   ros2_libxr::TimedHeading heading_;
